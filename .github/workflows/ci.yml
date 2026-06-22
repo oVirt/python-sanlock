@@ -1,0 +1,113 @@
+---
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  lint:
+    name: Lint (flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Run flake8
+        run: flake8 --statistics tests/ example.py
+
+  build-and-test:
+    name: Build and test (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: centos-stream10
+            container: "quay.io/ovirt/buildcontainer:el10stream"
+          - label: almalinux10
+            container: "quay.io/ovirt/buildcontainer:almalinux10"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            python3-devel \
+            python3-pytest \
+            python3-wheel \
+            sanlock \
+            sanlock-devel \
+            sanlock-lib
+
+      - name: Build the C extension in-place
+        run: python3 setup.py build_ext --inplace
+
+      - name: Install the package (editable)
+        run: pip3 install --no-build-isolation -e .
+
+      - name: Install test dependencies
+        run: pip3 install userstorage
+
+      - name: Run tests
+        run: |
+          source tests/env.sh
+          pytest tests/ -v
+
+  rpm-build:
+    name: RPM build (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: centos-stream10
+            container: "quay.io/ovirt/buildcontainer:el10stream"
+          - label: almalinux10
+            container: "quay.io/ovirt/buildcontainer:almalinux10"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install RPM build dependencies
+        run: |
+          dnf install -y \
+            gcc \
+            python3-devel \
+            sanlock-devel \
+            rpm-build
+
+      - name: Create source tarball
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          VERSION=$(grep '^Version:' python-sanlock.spec | sed 's/Version: *//')
+          mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SRPMS}
+          git archive --format=tar.gz --prefix="python-sanlock-${VERSION}/" \
+            --output=rpmbuild/SOURCES/python-sanlock-${VERSION}.tar.gz HEAD
+
+      - name: Build RPM
+        run: |
+          rpmbuild -ba python-sanlock.spec \
+            --define "_topdir $(pwd)/rpmbuild"
+
+      - name: Upload RPMs
+        uses: actions/upload-artifact@v7
+        with:
+          name: rpms-${{ matrix.label }}
+          path: |
+            rpmbuild/RPMS/**/*.rpm
+            rpmbuild/SRPMS/**/*.src.rpm
