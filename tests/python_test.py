@@ -427,8 +427,22 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
         sanlock.get_hosts(b"ls_name", 1)
     assert e.value.errno == errno.EAGAIN
 
-    time.sleep(1)
-    host = sanlock.get_hosts(b"ls_name", 1)[0]
+    # With iotimeout=1 the scan interval is 2*io_timeout=2s; HOST_LIVE requires
+    # two scan cycles (the second sees the timestamp change), so ~4s minimum.
+    # Poll for up to 10s to avoid flakiness.
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            host = sanlock.get_hosts(b"ls_name", 1)[0]
+        except sanlock.SanlockException as e:
+            if e.errno != errno.EAGAIN:
+                raise
+        else:
+            if host["flags"] == sanlock.HOST_LIVE:
+                break
+        assert time.monotonic() < deadline, \
+            f"Timed out waiting for HOST_LIVE, current flags: {host['flags']}"
+        time.sleep(0.5)
     assert host["flags"] == sanlock.HOST_LIVE
 
     disks = [(res_path, offset)]
