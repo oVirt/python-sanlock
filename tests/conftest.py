@@ -7,8 +7,6 @@
 """
 Fixtures for sanlock testing.
 """
-from __future__ import absolute_import
-
 import pytest
 import userstorage
 

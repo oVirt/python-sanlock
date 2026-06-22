@@ -7,8 +7,6 @@
 """
 Test sanlock python binding with sanlock daemon.
 """
-from __future__ import absolute_import
-
 import errno
 import io
 import os
