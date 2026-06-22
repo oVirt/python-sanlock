@@ -21,7 +21,9 @@ import time
 from . units import KiB
 
 TESTDIR = os.path.dirname(__file__)
-SANLOCK = os.environ.get("SANLOCK_PATH") or shutil.which("sanlock") or "/usr/sbin/sanlock"
+SANLOCK = os.environ.get("SANLOCK_PATH") or \
+                shutil.which("sanlock") or \
+                "/usr/sbin/sanlock"
 
 GUARD = b"X"
 GUARD_SIZE = 4 * KiB
