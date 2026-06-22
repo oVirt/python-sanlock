@@ -284,6 +284,10 @@ static void
 set_error(PyObject* exception, const char* format, PyObject* obj)
 {
     const char* str_rep = "";
+    /* Clear any active exception before calling PyObject_Repr; some Python
+     * versions (3.12+) refuse to call repr() while an exception is pending.
+     * We are about to replace the exception via PyErr_Format anyway. */
+    PyErr_Clear();
     PyObject* rep = PyObject_Repr(obj);
     if (rep)
         str_rep = pystring_as_cstring(rep);
