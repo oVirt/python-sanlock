@@ -1,0 +1,163 @@
+---
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint (flake8)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Run flake8
+        run: flake8 --statistics tests/ example.py
+
+  test:
+    name: Build and test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: almalinux-10
+            container-name: almalinux10
+          - name: centos-stream-10
+            container-name: el10stream
+
+    container:
+      image: quay.io/ovirt/buildcontainer:${{ matrix.container-name }}
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            python3-devel \
+            python3-pytest \
+            python3-wheel \
+            sanlock \
+            sanlock-devel \
+            sanlock-lib
+
+      - name: Build the C extension in-place
+        run: python3 setup.py build_ext --inplace
+
+      - name: Install the package (editable)
+        run: pip3 install --no-build-isolation -e .
+
+      - name: Install test dependencies
+        run: pip3 install userstorage
+
+      - name: Run tests
+        run: |
+          source tests/env.sh
+          pytest tests/ -v
+
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: almalinux-10
+            shortcut: el10
+            container-name: almalinux10
+          - name: centos-stream-10
+            shortcut: el10s
+            container-name: el10stream
+
+    name: Build on ${{ matrix.name }}
+    container:
+      image: quay.io/ovirt/buildcontainer:${{ matrix.container-name }}
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - name: Mark repository as safe
+        run: git config --global --add safe.directory "$(pwd)"
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            gcc \
+            git \
+            python3-devel \
+            python3-setuptools \
+            rpm-build \
+            sanlock-devel
+
+      - name: Set build environment
+        run: |
+          TAG=$(git tag --points-at HEAD | head -1)
+          if [[ -n "$TAG" ]]; then
+            if [[ "$TAG" =~ -([0-9]+)$ ]]; then
+              echo "PACKAGE_RPM_RELEASE=${BASH_REMATCH[1]}" >> $GITHUB_ENV
+            else
+              echo "PACKAGE_RPM_RELEASE=1" >> $GITHUB_ENV
+            fi
+          else
+            echo "PACKAGE_RPM_RELEASE=0.master" >> $GITHUB_ENV
+            echo "RELEASE_SUFFIX=.$(date --utc +%Y%m%d%H%M%S).git$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          fi
+
+      - name: Create source tarball
+        run: |
+          VERSION=$(grep '^Version:' python-sanlock.spec | awk '{print $2}')
+          mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SRPMS}
+          git archive --format=tar.gz \
+            --prefix="python-sanlock-${VERSION}/" \
+            --output="rpmbuild/SOURCES/python-sanlock-${VERSION}.tar.gz" \
+            HEAD
+
+      - name: Build RPM
+        run: |
+          rpmbuild -ba python-sanlock.spec \
+            --define "_topdir $(pwd)/rpmbuild" \
+            --define "rpm_release ${PACKAGE_RPM_RELEASE}" \
+            --define "release_suffix ${RELEASE_SUFFIX}"
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p exported-artifacts
+          find rpmbuild/RPMS -iname \*.rpm -exec mv "{}" exported-artifacts/ \;
+          find rpmbuild/SRPMS -iname \*.src.rpm -exec mv "{}" exported-artifacts/ \;
+          mv rpmbuild/SOURCES/python-sanlock-*.tar.gz exported-artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: rpm-${{ matrix.shortcut }}
+          path: exported-artifacts
+
+  publish-rpms:
+    permissions:
+      artifact-metadata: read
+    needs: build
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    uses: ovirt/ovirt-workflows/.github/workflows/publish-rpms.yml@main
+    secrets: inherit

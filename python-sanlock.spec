@@ -1,6 +1,8 @@
+%{!?rpm_release:%global rpm_release 0.master}
+
 Name:           python-sanlock
 Version:        5.1.0
-Release:        1%{?dist}
+Release:        %{rpm_release}%{?release_suffix}%{?dist}
 Summary:        Python bindings for the sanlock library
 
 License:        GPL-2.0-or-later
